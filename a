@@ -1,0 +1,85 @@
+01 · 파트 A — 회원·지역·DB 담당
+
+
+⚠️ 먼저 00_공통기반_먼저읽기.md를 코딩 AI에 넣어 프로젝트 뼈대를 세운 뒤 이 파일을 넣으세요.
+이 파일만 봐도 A 파트가 완성되도록 썼습니다. 우리 팀 대화 맥락이 없어도 됩니다.
+
+
+
+담당 범위 한 줄
+
+사용자 가입/로그인, 지역 검색·즐겨찾기, Supabase 연동, 지역명→좌표 변환. 앱의 뼈대와 데이터 계층.
+
+만들 파일
+
+
+lib/supabase.ts — Supabase 클라이언트
+lib/regionGrid.ts — 지역명 검색 + nx,ny 반환
+app/login/page.tsx — 로그인/가입 (UI는 D와 협업, 데이터 로직은 A)
+app/onboarding/region/page.tsx — 지역 검색·선택
+app/onboarding/time/page.tsx — 알림 시간 설정
+Supabase 스키마 실행 + regions 시드 (00번 3장 참고)
+
+
+
+코딩 AI에 넣을 지시문 (복사해서 사용)
+
+당신은 Next.js 14(App Router) + TypeScript + Tailwind + Supabase 프로젝트에서
+"회원·지역·DB" 파트를 구현합니다. 아래를 순서대로 만들어 주세요.
+
+[전제]
+- Supabase 스키마(users, regions, favorite_locations, user_settings)는 이미 생성됨.
+- 환경변수: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY 사용.
+- 모바일 우선, 콘텐츠 최대폭 480px 중앙 정렬. 친근한 존댓말 UI.
+
+[1] lib/supabase.ts
+- @supabase/supabase-js 로 브라우저용 클라이언트 생성해 export.
+
+[2] app/login/page.tsx (화면1 로그인/가입)
+- 입력: 전화번호(phone), 이름(name). 간단 로그인(문자인증 없음, MVP 가정).
+- "시작하기" 클릭 시: users 테이블에 phone 기준 upsert.
+  - 신규면 insert 후 /onboarding/region 로 이동.
+  - 기존 사용자(이미 지역+설정 있음)면 /home 으로 이동.
+- 전화번호 형식 검증(숫자 10~11자리), 오류 시 인라인 안내.
+- user_id는 로그인 후 localStorage에 저장(MVP 간이 세션).
+- 배경은 clear 테마 고정(지역 모르므로). 실제 컴포넌트는 D가 만들지만,
+  없으면 임시로 하늘색 배경 div로 대체.
+
+[3] app/onboarding/region/page.tsx (화면2 지역 선택)
+- 지역명 검색 input. 입력 시 regions 테이블을 ilike로 검색(자동완성 목록).
+- 목록에서 하나 선택 → favorite_locations 에 (user_id, region_id) 저장.
+- 진행 표시 점(2/3). "다음" → /onboarding/time.
+- 검색 결과 없으면 "다른 지역명으로 검색해 보세요" 안내.
+
+[4] app/onboarding/time/page.tsx (화면3 알림 시간)
+- 시각 선택(기본 07:00), 요일 토글(기본 월~금).
+- "완료" → user_settings 에 (user_id, push_time, weekdays, push_enabled=true) upsert
+  → /home 이동.
+- 진행 표시 점(3/3).
+
+[5] lib/regionGrid.ts
+- searchRegions(keyword): regions 테이블 ilike 검색 결과 반환.
+- getGrid(regionId): 해당 region의 nx,ny 반환. (기상청 호출용, B가 사용)
+
+[요구]
+- 모든 Supabase 호출은 try/catch, 실패 시 사용자에게 토스트/인라인 안내.
+- 타입 정의(User, Region, UserSettings)를 lib/types.ts 로 분리.
+- 코드에 한국어 주석으로 각 함수 역할 설명.
+
+
+화면설계 요약 (근거: 프로젝트 기획서 v2 화면 1·2·3)
+
+화면목적핵심 데이터·상태주요 CTA예외/빈/로딩로그인최초 진입phone, name → users upsert시작하기형식오류 인라인, 로딩 스피너지역선택좌표 매핑regions 검색 → favorite_locations다음결과없음 안내, 미선택시 비활성알림시간발송 시각user_settings upsert완료기본값 제안
+
+다른 파트와의 접점 (중요)
+
+
+B: getGrid(regionId)로 nx,ny를 넘겨줌 → B가 기상청 호출.
+C: 발송 대상 = user_settings.push_enabled=true인 사용자 + 그들의 favorite_locations.
+D: 각 화면의 UI 컴포넌트를 D가 다듬음. A는 데이터 로직·페이지 뼈대 제공.
+세션 방식: MVP는 localStorage에 user_id 저장(간이). 정식 인증은 2차.
+
+
+페르소나 검증 (나화진)
+
+바쁜 아침 → 전화번호·이름만 입력(최소) → "강남구" 검색 → 평일 7시 설정 → 끝. 다음날부터 브리핑 수신
