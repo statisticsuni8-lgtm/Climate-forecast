@@ -1,0 +1,187 @@
+# 00 · 공통 기반 (모든 팀원 필독 · 가장 먼저 실행)
+
+> ⚠️ **팀원 누구든, 자기 파트를 시작하기 전에 이 파일을 Claude Code(또는 코딩 AI)에 가장 먼저 넣고 프로젝트 뼈대를 세우세요.**
+> 이 파일이 4명의 작업이 서로 충돌하지 않게 하는 "공통 약속"입니다. 여기서 정한 폴더 구조·DB·환경변수·디자인 규칙을 각자 그대로 따릅니다.
+
+---
+
+## 0. 이 앱이 뭔가요 (한 문단 요약)
+
+매일 아침, 사용자가 설정한 지역의 날씨를 분석해서 "오늘 우산 챙기세요 / 겉옷 입으세요" 같은 **행동 조언 한 문장**을 AI(Google Gemini)가 만들어 푸시 알림으로 보내주는 모바일 웹앱입니다. 날씨를 그냥 보여주는 앱이 아니라, **뭘 챙길지 대신 판단해주는 앱**입니다. 푸시를 지워도 앱 홈 화면에서 오늘의 조언을 다시 볼 수 있습니다.
+
+이번 MVP 범위: **온보딩 3화면(로그인 → 지역 선택 → 알림 시간) + 홈 화면 + 푸시 발송**. (알림 기록·설정·에러 전용 화면은 2차)
+
+---
+
+## 1. 기술 스택 (고정 — 바꾸지 마세요)
+
+- **프레임워크**: Next.js 14 (App Router) + TypeScript
+- **스타일**: Tailwind CSS
+- **DB·인증·서버리스**: Supabase (Postgres + Edge Functions)
+- **AI**: Google Gemini API (무료 티어, 모델: `gemini-1.5-flash`)
+- **날씨**: 기상청 단기예보 API (공공데이터포털, 무료)
+- **배포**: Vercel
+- **모바일 우선** 반응형 (최대 폭 480px 기준으로 디자인, 데스크톱에선 가운데 정렬)
+
+---
+
+## 2. 폴더 구조 (모두 이 구조를 따릅니다)
+
+```
+weather-briefing/
+├── app/
+│   ├── layout.tsx              # 공통 레이아웃 (D 담당)
+│   ├── page.tsx                # 진입점 → 로그인 여부에 따라 분기 (D)
+│   ├── login/page.tsx          # 화면1 로그인 (A + D)
+│   ├── onboarding/
+│   │   ├── region/page.tsx     # 화면2 지역 선택 (A + D)
+│   │   └── time/page.tsx       # 화면3 알림 시간 (A + D)
+│   ├── home/page.tsx           # 화면4 홈·브리핑 (D, 데이터는 A·B·C)
+│   └── api/
+│       ├── weather/route.ts    # 기상청 호출 래퍼 (B)
+│       └── briefing/route.ts   # Gemini 문구 생성 (C)
+├── components/
+│   ├── WeatherBackground.tsx   # 날씨별 배경 테마 (D)
+│   ├── AIBriefingCard.tsx      # 오늘의 추천 카드 (D)
+│   ├── HourlyForecastStrip.tsx # 시간대별 예보 (D)
+│   └── BottomTabBar.tsx        # 하단 탭 (D, MVP에선 홈만 활성)
+├── lib/
+│   ├── supabase.ts             # Supabase 클라이언트 (A)
+│   ├── weather.ts              # 기상청 파싱 + 3축 판정 (B)
+│   ├── regionGrid.ts           # 지역명 → nx,ny 변환 (A + B)
+│   └── gemini.ts               # Gemini 호출 + fallback (C)
+├── supabase/
+│   ├── schema.sql              # 아래 3번 그대로 (A)
+│   └── functions/
+│       └── daily-briefing/     # 매일 아침 스케줄러 (C)
+├── .env.local                  # 아래 4번 참고 (각자 로컬)
+└── package.json
+```
+
+---
+
+## 3. DB 스키마 (Supabase · 이 SQL 그대로 사용)
+
+`supabase/schema.sql`에 아래를 그대로 넣고 Supabase SQL Editor에서 실행하세요. **담당 A가 1일차에 먼저 실행**합니다.
+
+```sql
+-- 사용자
+create table if not exists users (
+  user_id     uuid primary key default gen_random_uuid(),
+  phone       text unique not null,
+  name        text not null,
+  created_at  timestamptz default now()
+);
+
+-- 지역-좌표 매핑 (기상청 격자 좌표. 시드 데이터로 미리 채움)
+create table if not exists regions (
+  region_id    serial primary key,
+  region_name  text not null,          -- 예: "서울특별시 강남구"
+  nx           int not null,
+  ny           int not null
+);
+
+-- 사용자 선호(즐겨찾기) 지역
+create table if not exists favorite_locations (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid references users(user_id) on delete cascade,
+  region_id   int references regions(region_id),
+  label       text,                    -- "집", "회사" 등 (선택)
+  created_at  timestamptz default now()
+);
+
+-- 사용자 알림 설정
+create table if not exists user_settings (
+  user_id       uuid primary key references users(user_id) on delete cascade,
+  push_time     text default '07:00',  -- "HH:MM"
+  weekdays      int[] default '{1,2,3,4,5}', -- 0=일 ~ 6=토
+  push_enabled  boolean default true
+);
+
+-- 일별 날씨 기록 (축별 판정 결과 저장, 어제와 비교용)
+create table if not exists weather_logs (
+  id          uuid primary key default gen_random_uuid(),
+  region_id   int references regions(region_id),
+  date        date not null,
+  rain_axis   text,   -- none/rain/snow/sleet/shower
+  temp_axis   text,   -- normal/hot/cold/swing
+  humid_axis  text,   -- normal/humid/windy
+  sky_theme   text,   -- clear/cloudy/overcast/rain/snow (배경용)
+  raw_summary jsonb,  -- 원본 요약(기온·습도 등)
+  unique (region_id, date)
+);
+
+-- 푸시 발송 이력 (홈 재확인 + 기록용)
+create table if not exists push_logs (
+  id        uuid primary key default gen_random_uuid(),
+  user_id   uuid references users(user_id) on delete cascade,
+  date      date not null,
+  message   text not null,
+  sent_at   timestamptz default now(),
+  unique (user_id, date)
+);
+```
+
+### regions 시드 데이터 (MVP는 우선 5~10개만)
+담당 A가 기상청 "단기예보 격자 좌표 엑셀"에서 아래 형식으로 몇 개만 먼저 넣습니다. 전국 확장은 2차.
+```sql
+insert into regions (region_name, nx, ny) values
+  ('서울특별시 강남구', 61, 126),
+  ('서울특별시 종로구', 60, 127),
+  ('인천광역시 남동구', 54, 124),
+  ('경기도 성남시 분당구', 62, 123),
+  ('부산광역시 해운대구', 99, 75);
+```
+> ⚠️ 위 nx,ny는 예시값입니다. 실제 값은 기상청 공식 엑셀에서 확인해 교체하세요 (담당 A·B 협업).
+
+---
+
+## 4. 환경변수 (.env.local · 각자 로컬에 생성)
+
+```
+NEXT_PUBLIC_SUPABASE_URL=여기에_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=여기에_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=여기에_service_role_key   # 서버(스케줄러)용
+KMA_API_KEY=여기에_기상청_공공데이터포털_키
+GEMINI_API_KEY=여기에_gemini_api_key
+```
+> 키 발급은 1일차 최우선. 기상청은 공공데이터포털(data.go.kr) "단기예보 조회서비스" 활용신청, Gemini는 aistudio.google.com에서 발급.
+
+---
+
+## 5. 날씨 3축 판정 규칙 (B·C가 공유하는 핵심 로직)
+
+날씨를 하나의 유형으로 뭉뚱그리지 않고 **3개 축을 독립적으로 판정**합니다. 각 축 결과를 조합해 Gemini가 문장을 만듭니다.
+
+| 축 | 기상청 항목 | 판정값 | 기준(초안) |
+|----|-----------|--------|-----------|
+| 강수 | PTY | none/rain/snow/sleet/shower | PTY: 0없음,1비,2비눈,3눈,4소나기 |
+| 기온 | TMX, TMN | normal/hot/cold/swing | hot:TMX≥28, cold:TMN≤5, swing:(TMX−TMN)≥10 |
+| 습도·바람 | REH, WSD | normal/humid/windy | humid:REH≥80, windy:WSD≥9 |
+
+- **배경 테마(sky_theme)는 별도**: 강수(PTY)+하늘상태(SKY)로 5가지(clear/cloudy/overcast/rain/snow)만 결정. 기온·습도는 배경 아닌 **문장에만** 반영. → "판정은 정밀하게, 배경은 심플하게"
+- **결측치**: 기상청 값이 900 이상 또는 −900 이하이면 결측 → 해당 축은 판정 제외.
+- **반복 방지**: `weather_logs`에 어제 값 저장 → 오늘과 비교해 "이틀째 습해요" 같은 맥락을 Gemini 프롬프트에 추가.
+
+---
+
+## 6. 디자인 규칙 (D가 주도, 전원 참고)
+
+- **모바일 우선**: 콘텐츠 최대 폭 480px, 화면 중앙 정렬.
+- **날씨별 배경 테마**: 애플 날씨 앱 오마주. 5가지 sky_theme별로 배경색 + 가벼운 애니메이션(구름 이동, 빗방울/눈).
+  - clear: 하늘색(#7FB8E8) / cloudy: 회청(#93AEC4) / overcast: 회색(#8B95A0) / rain: 어두운 청회(#55657A) / snow: 밝은 회청(#A9B4C2)
+- **로그인 화면 배경 가정**: 로그인 시점엔 아직 지역을 몰라 날씨를 알 수 없음 → 로그인은 기본 테마(clear)로 고정. 진짜 날씨 배경은 홈 화면부터 적용.
+- **톤**: 친근한 존댓말, 아침 인사 느낌. 잔소리 아닌 "오늘 하루 톤 잡아주는 친구".
+- **폰트**: 시스템 기본 (Pretendard 권장, 없으면 sans-serif).
+
+---
+
+## 7. 작업 순서 (권장)
+
+1. **A**가 이 파일로 프로젝트 초기화 + Supabase 스키마 실행 + regions 시드 → 나머지가 clone.
+2. **B**는 목(mock) 좌표로 기상청 연동·3축 판정부터 (A의 DB 없어도 시작 가능).
+3. **C**는 목 날씨 데이터로 Gemini 문구 생성부터 (B 완성 전에도 시작 가능).
+4. **D**는 API 명세만 합의되면 화면부터 (목 데이터로 UI 먼저).
+5. 2일차에 서로 연결, 3일차에 버그·데모.
+
+각자 자기 파트 파일(`01_A_...` ~ `04_D_...`)을 이 파일 다음에 넣고 진행하세요.
