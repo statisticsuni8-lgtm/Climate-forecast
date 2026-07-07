@@ -27,6 +27,9 @@ import HourlyForecastStrip, {
   type HourItem,
 } from "@/components/HourlyForecastStrip";
 import BottomTabBar from "@/components/BottomTabBar";
+import TodoChecklist from "@/components/TodoChecklist";
+import { deriveChecklistItems, type ChecklistItem } from "@/lib/checklist";
+import type { WeatherClassification } from "@/lib/weather";
 
 // sky_theme → 헤더에 보여줄 한국어 날씨 상태 라벨
 const SKY_LABEL: Record<SkyTheme, string> = {
@@ -62,6 +65,10 @@ interface HomeData {
   skyLabel: string;
   message: string; // 이름 치환 완료된 최종 문장
   hours: HourItem[];
+  userId: string;
+  date: string;
+  checklistItems: ChecklistItem[];
+  checkedItems: string[];
 }
 
 type Status = "loading" | "loaded" | "error";
@@ -102,77 +109,101 @@ export default function HomePage() {
     }
 
     try {
-      // ── 2) 지역 + 좌표 (favorite_locations ⨝ regions) ──
+      const today = todayStr();
+
+      // ── 2) 지역 + 좌표 (favorite_locations ⨝ regions) + 이름 + 오늘 체크 상태 ──
+      // 서로 의존관계가 없는 조회라 Promise.all로 동시에 보내 왕복 시간을 줄인다.
       let region = { ...FALLBACK_REGION };
       let userName = "";
+      let checkedItems: string[] = [];
       try {
-        const { data: fav } = await supabase
-          .from("favorite_locations")
-          .select("regions(region_name, nx, ny)")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-        const r = Array.isArray((fav as any)?.regions)
-          ? (fav as any).regions[0]
-          : (fav as any)?.regions;
+        const [favRes, userRes, checklistRes] = await Promise.all([
+          supabase
+            .from("favorite_locations")
+            .select("regions(region_name, nx, ny)")
+            .eq("user_id", userId)
+            .limit(1)
+            .maybeSingle(),
+          supabase.from("users").select("name").eq("user_id", userId).maybeSingle(),
+          supabase
+            .from("checklist_status")
+            .select("checked_items")
+            .eq("user_id", userId)
+            .eq("date", today)
+            .maybeSingle(),
+        ]);
+
+        const r = Array.isArray((favRes.data as any)?.regions)
+          ? (favRes.data as any).regions[0]
+          : (favRes.data as any)?.regions;
         if (r) {
           region = { region_name: r.region_name, nx: r.nx, ny: r.ny };
         }
-        // 이름(문구 {name} 치환용)
-        const { data: u } = await supabase
-          .from("users")
-          .select("name")
-          .eq("user_id", userId)
-          .maybeSingle();
-        if (u?.name) userName = u.name as string;
+        if (userRes.data?.name) userName = userRes.data.name as string;
+        if (checklistRes.data?.checked_items) {
+          checkedItems = checklistRes.data.checked_items as string[];
+        }
       } catch {
         /* Supabase 미설정/오류 → 기본 지역으로 계속 */
       }
 
-      // ── 3) 오늘 날씨 (B의 API) ──
-      // B의 실제 응답은 { forecast: { hourly, tmx, tmn }, classification: { sky_theme, raw_summary, ... } }
-      // 형태라(다른 필드명 없음), 여기서 화면에 필요한 skyTheme/tmp/hours로 매핑한다.
+      // ── 3) 오늘 날씨(B) + 오늘 문구(push_logs 우선, C) 동시 조회 ──
+      // 둘 다 region이 확정된 뒤에만 필요하지만 서로는 독립적이라 병렬로 보낸다.
       let skyTheme: SkyTheme = "clear";
       let tmp: number | null = null;
       let hours: HourItem[] = [];
-      try {
-        const wRes = await fetch(`/api/weather?nx=${region.nx}&ny=${region.ny}`);
-        if (wRes.ok) {
-          const w = await wRes.json();
-          if (w?.classification?.sky_theme) skyTheme = w.classification.sky_theme as SkyTheme;
-          tmp = w?.classification?.raw_summary?.tmp ?? null;
-          if (Array.isArray(w?.forecast?.hourly)) {
-            hours = w.forecast.hourly.map((h: { time: string; pty: number | null; sky: number | null; tmp: number | null }, i: number) => ({
-              time: i === 0 ? "지금" : `${h.time.slice(0, 2)}시`,
-              icon: hourlyIcon(h.pty, h.sky),
-              temp: h.tmp ?? 0,
-            }));
-          }
-        }
-      } catch {
-        /* 날씨 API 미완성 → clear/mock으로 표시 */
-      }
-
-      // ── 4) 오늘 문구 (push_logs 우선 → /api/briefing) ──
+      let classification: WeatherClassification | null = null;
       let message = "";
-      try {
-        const { data: pushRow } = await supabase
+
+      const [weatherResult, pushLogResult] = await Promise.allSettled([
+        fetch(`/api/weather?nx=${region.nx}&ny=${region.ny}`).then((r) =>
+          r.ok ? r.json() : null
+        ),
+        supabase
           .from("push_logs")
           .select("message")
           .eq("user_id", userId)
-          .eq("date", todayStr())
-          .maybeSingle();
-        if (pushRow?.message) message = pushRow.message as string; // 이미 이름 치환됨
-      } catch {
-        /* push_logs 없음 → 아래 briefing으로 */
+          .eq("date", today)
+          .maybeSingle(),
+      ]);
+
+      if (weatherResult.status === "fulfilled" && weatherResult.value) {
+        // B의 실제 응답은 { forecast: { hourly, tmx, tmn }, classification: { sky_theme, raw_summary, ... } }
+        // 형태라(다른 필드명 없음), 여기서 화면에 필요한 skyTheme/tmp/hours로 매핑한다.
+        const w = weatherResult.value;
+        if (w?.classification) classification = w.classification as WeatherClassification;
+        if (w?.classification?.sky_theme) skyTheme = w.classification.sky_theme as SkyTheme;
+        tmp = w?.classification?.raw_summary?.tmp ?? null;
+        if (Array.isArray(w?.forecast?.hourly)) {
+          hours = w.forecast.hourly.map(
+            (
+              h: { time: string; pty: number | null; sky: number | null; tmp: number | null },
+              i: number
+            ) => ({
+              time: i === 0 ? "지금" : `${h.time.slice(0, 2)}시`,
+              icon: hourlyIcon(h.pty, h.sky),
+              temp: h.tmp ?? 0,
+            })
+          );
+        }
       }
+
+      if (
+        pushLogResult.status === "fulfilled" &&
+        (pushLogResult.value as any)?.data?.message
+      ) {
+        message = (pushLogResult.value as any).data.message as string; // 이미 이름 치환됨
+      }
+
+      // ── 4) push_logs에 오늘 기록이 없을 때만 즉석 생성 (region이 필요해 순서상 뒤에 옴) ──
       if (!message) {
         try {
-          const bRes = await fetch(
-            `/api/briefing?nx=${region.nx}&ny=${region.ny}`
-          );
+          const bRes = await fetch(`/api/briefing?nx=${region.nx}&ny=${region.ny}`);
           if (bRes.ok) {
             const b = await bRes.json();
+            if (!classification && b?.classification) {
+              classification = b.classification as WeatherClassification;
+            }
             message = fillName(b?.message ?? "", userName);
           }
         } catch {
@@ -190,6 +221,10 @@ export default function HomePage() {
         skyLabel: SKY_LABEL[skyTheme],
         message,
         hours,
+        userId,
+        date: today,
+        checklistItems: classification ? deriveChecklistItems(classification) : [],
+        checkedItems,
       };
       setData(next);
       setStatus("loaded");
@@ -299,6 +334,16 @@ export default function HomePage() {
           message={data?.message ?? ""}
           loading={isLoading && !data}
         />
+
+        {/* 차별화 기능: 오늘 챙길 것 체크리스트 (탭하면 즉시 저장) */}
+        {data && (
+          <TodoChecklist
+            items={data.checklistItems}
+            userId={data.userId}
+            date={data.date}
+            initialChecked={data.checkedItems}
+          />
+        )}
 
         {/* 보조: 시간대별 예보 */}
         <HourlyForecastStrip hours={data?.hours} />

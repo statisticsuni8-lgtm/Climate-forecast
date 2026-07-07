@@ -54,6 +54,17 @@ create table if not exists push_logs (
   unique (user_id, date)
 );
 
+-- 오늘 챙길 것 체크리스트 상태 (담당 C, 홈 화면 차별화 기능)
+-- 항목 목록 자체는 저장하지 않고 lib/checklist.ts에서 그날 판정으로 매번 파생시킨다.
+-- 여기엔 사용자가 "체크했다"는 상태(checked_items의 item id 목록)만 저장한다.
+create table if not exists checklist_status (
+  user_id       uuid references users(user_id) on delete cascade,
+  date          date not null,
+  checked_items text[] not null default '{}',
+  updated_at    timestamptz default now(),
+  primary key (user_id, date)
+);
+
 -- regions 시드 데이터 (MVP는 우선 5~10개만, 전국 확장은 2차)
 -- ⚠️ 아래 nx,ny는 예시값입니다. 실제 값은 기상청 공식 격자 좌표 엑셀에서 확인해 교체하세요.
 insert into regions (region_name, nx, ny) values
