@@ -44,6 +44,17 @@ const FALLBACK_REGION = {
   ny: 126,
 };
 
+// 기상청 PTY(강수형태)·SKY(하늘상태) 코드로 시간대별 예보 아이콘(이모지)을 고른다
+function hourlyIcon(pty: number | null, sky: number | null): string {
+  if (pty === 1) return "🌧️";
+  if (pty === 2) return "🌨️";
+  if (pty === 3) return "❄️";
+  if (pty === 4) return "🌦️";
+  if (sky === 4) return "☁️";
+  if (sky === 3) return "🌤️";
+  return "☀️";
+}
+
 interface HomeData {
   regionName: string;
   tmp: number | null;
@@ -119,6 +130,8 @@ export default function HomePage() {
       }
 
       // ── 3) 오늘 날씨 (B의 API) ──
+      // B의 실제 응답은 { forecast: { hourly, tmx, tmn }, classification: { sky_theme, raw_summary, ... } }
+      // 형태라(다른 필드명 없음), 여기서 화면에 필요한 skyTheme/tmp/hours로 매핑한다.
       let skyTheme: SkyTheme = "clear";
       let tmp: number | null = null;
       let hours: HourItem[] = [];
@@ -126,9 +139,15 @@ export default function HomePage() {
         const wRes = await fetch(`/api/weather?nx=${region.nx}&ny=${region.ny}`);
         if (wRes.ok) {
           const w = await wRes.json();
-          if (w?.axes?.sky_theme) skyTheme = w.axes.sky_theme as SkyTheme;
-          tmp = w?.summary?.tmp ?? w?.tmp ?? null;
-          if (Array.isArray(w?.hours)) hours = w.hours as HourItem[];
+          if (w?.classification?.sky_theme) skyTheme = w.classification.sky_theme as SkyTheme;
+          tmp = w?.classification?.raw_summary?.tmp ?? null;
+          if (Array.isArray(w?.forecast?.hourly)) {
+            hours = w.forecast.hourly.map((h: { time: string; pty: number | null; sky: number | null; tmp: number | null }, i: number) => ({
+              time: i === 0 ? "지금" : `${h.time.slice(0, 2)}시`,
+              icon: hourlyIcon(h.pty, h.sky),
+              temp: h.tmp ?? 0,
+            }));
+          }
         }
       } catch {
         /* 날씨 API 미완성 → clear/mock으로 표시 */
