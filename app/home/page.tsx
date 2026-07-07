@@ -28,6 +28,7 @@ import HourlyForecastStrip, {
 } from "@/components/HourlyForecastStrip";
 import BottomTabBar from "@/components/BottomTabBar";
 import TodoChecklist from "@/components/TodoChecklist";
+import RainAlertBanner, { type UltraRainType } from "@/components/RainAlertBanner";
 import { deriveChecklistItems, type ChecklistItem } from "@/lib/checklist";
 import type { WeatherClassification } from "@/lib/weather";
 
@@ -69,6 +70,8 @@ interface HomeData {
   date: string;
   checklistItems: ChecklistItem[];
   checkedItems: string[];
+  currentRainType: UltraRainType;
+  rainStartHour: number | null;
 }
 
 type Status = "loading" | "loaded" | "error";
@@ -147,15 +150,17 @@ export default function HomePage() {
         /* Supabase 미설정/오류 → 기본 지역으로 계속 */
       }
 
-      // ── 3) 오늘 날씨(B) + 오늘 문구(push_logs 우선, C) 동시 조회 ──
-      // 둘 다 region이 확정된 뒤에만 필요하지만 서로는 독립적이라 병렬로 보낸다.
+      // ── 3) 오늘 날씨(B) + 오늘 문구(push_logs 우선, C) + 초단기 강수예측(C) 동시 조회 ──
+      // 셋 다 region이 확정된 뒤에만 필요하지만 서로는 독립적이라 병렬로 보낸다.
       let skyTheme: SkyTheme = "clear";
       let tmp: number | null = null;
       let hours: HourItem[] = [];
       let classification: WeatherClassification | null = null;
       let message = "";
+      let currentRainType: UltraRainType = "none";
+      let rainStartHour: number | null = null;
 
-      const [weatherResult, pushLogResult] = await Promise.allSettled([
+      const [weatherResult, pushLogResult, nowcastResult] = await Promise.allSettled([
         fetch(`/api/weather?nx=${region.nx}&ny=${region.ny}`).then((r) =>
           r.ok ? r.json() : null
         ),
@@ -165,7 +170,16 @@ export default function HomePage() {
           .eq("user_id", userId)
           .eq("date", today)
           .maybeSingle(),
+        fetch(`/api/nowcast?nx=${region.nx}&ny=${region.ny}`).then((r) =>
+          r.ok ? r.json() : null
+        ),
       ]);
+
+      if (nowcastResult.status === "fulfilled" && nowcastResult.value?.nowcast) {
+        const n = nowcastResult.value.nowcast;
+        currentRainType = (n.currentRainType as UltraRainType) ?? "none";
+        rainStartHour = n.rainStartHour ?? null;
+      }
 
       if (weatherResult.status === "fulfilled" && weatherResult.value) {
         // B의 실제 응답은 { forecast: { hourly, tmx, tmn }, classification: { sky_theme, raw_summary, ... } }
@@ -225,6 +239,8 @@ export default function HomePage() {
         date: today,
         checklistItems: classification ? deriveChecklistItems(classification) : [],
         checkedItems,
+        currentRainType,
+        rainStartHour,
       };
       setData(next);
       setStatus("loaded");
@@ -308,6 +324,14 @@ export default function HomePage() {
           >
             최신 정보를 못 불러왔어요. 마지막으로 저장된 내용을 보여드릴게요.
           </div>
+        )}
+
+        {/* 차별화 기능: 초단기 강수예측 알림(곧 비/지금 비) — 실내에 있어도 놓치지 않게 최상단에 배치 */}
+        {data && (
+          <RainAlertBanner
+            currentRainType={data.currentRainType}
+            rainStartHour={data.rainStartHour}
+          />
         )}
 
         {/* 지역명 · 현재기온 · 날씨상태 */}
