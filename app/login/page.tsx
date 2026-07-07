@@ -73,35 +73,38 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#7FB8E8] flex items-center justify-center px-4">
-      <div className="w-full max-w-[480px] bg-white/90 rounded-2xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">안녕하세요</h1>
-        <p className="text-gray-600 mb-8">오늘 뭘 챙겨야 할지, 저희가 알려드릴게요.</p>
+    <div className="min-h-[100dvh] bg-[linear-gradient(180deg,#8FC4F0_0%,#7FB8E8_100%)] flex items-center justify-center px-5 py-10">
+      <div className="w-full max-w-[420px] rounded-[28px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_60px_-15px_rgba(15,45,90,0.35)] backdrop-blur-xl">
+        <p className="mb-3 text-4xl">☀️</p>
+        <h1 className="mb-2 text-[26px] font-bold tracking-tight text-gray-900">안녕하세요</h1>
+        <p className="mb-8 text-[15px] leading-relaxed text-gray-500">
+          오늘 뭘 챙겨야 할지, 저희가 알려드릴게요.
+        </p>
 
-        <label className="block text-sm font-medium text-gray-700 mb-1">이름</label>
+        <label className="mb-1.5 block text-sm font-medium text-gray-600">이름</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="홍길동"
-          className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="mb-4 w-full rounded-2xl border border-gray-200 bg-white/70 px-4 py-3.5 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-400/40"
         />
 
-        <label className="block text-sm font-medium text-gray-700 mb-1">전화번호</label>
+        <label className="mb-1.5 block text-sm font-medium text-gray-600">전화번호</label>
         <input
           type="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
           placeholder="01012345678"
-          className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="mb-2 w-full rounded-2xl border border-gray-200 bg-white/70 px-4 py-3.5 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-400/40"
         />
 
-        {error && <p className="text-sm text-red-500 mb-4">{error}</p>}
+        {error && <p className="mb-2 text-sm font-medium text-red-500">{error}</p>}
 
         <button
           onClick={handleSubmit}
           disabled={loading}
-          className="w-full bg-blue-500 text-white font-semibold rounded-lg py-3 mt-4 disabled:opacity-50"
+          className="mt-4 w-full rounded-2xl bg-gradient-to-b from-blue-400 to-blue-500 py-3.5 text-[15px] font-semibold text-white shadow-lg shadow-blue-500/30 transition active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
         >
           {loading ? '확인 중...' : '시작하기'}
         </button>
